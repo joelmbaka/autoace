@@ -134,13 +134,13 @@ class GroqWhisperTranscriber:
                     GROQ_TRANSCRIPTIONS_URL,
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     files={"file": (name, audio_bytes, mime_type)},
-                    data=[
-                        ("model", self.model),
-                        ("response_format", "verbose_json"),
-                        ("language", "en"),
-                        ("temperature", "0"),
-                        ("timestamp_granularities[]", "segment"),
-                    ],
+                    data={
+                        "model": self.model,
+                        "response_format": "verbose_json",
+                        "language": "en",
+                        "temperature": "0",
+                        "timestamp_granularities[]": "segment",
+                    },
                 )
         except httpx.HTTPError as exc:
             raise RuntimeError(f"Groq transcription request failed: {exc}") from exc
