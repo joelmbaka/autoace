@@ -39,6 +39,7 @@ class ScribeDiagnosticsResult(BaseModel):
     language_probability: float | None = None
     transcript: str
     speaker_ids: list[str] = Field(default_factory=list)
+    spoken_words: list[ScribeToken] = Field(default_factory=list)
     audio_events: list[ScribeToken] = Field(default_factory=list)
     overlap_intervals: list[OverlapInterval] = Field(default_factory=list)
     total_overlap_seconds: float = 0.0
@@ -116,6 +117,7 @@ class ElevenLabsScribeDiagnostics:
             language_probability=_optional_float(payload.get("language_probability")),
             transcript=str(payload.get("text") or "").strip(),
             speaker_ids=speaker_ids,
+            spoken_words=spoken_words,
             audio_events=audio_events,
             overlap_intervals=overlap_intervals,
             total_overlap_seconds=round(
