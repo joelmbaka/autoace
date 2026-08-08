@@ -13,6 +13,8 @@ if str(ROOT) not in sys.path:
 
 from dotenv import load_dotenv
 
+load_dotenv(ROOT / ".env")
+
 from autoace_backend.metrics import emotional_tone_metrics
 from autoace_backend.services import (
     GeminiAnalyzer,
@@ -23,7 +25,6 @@ from autoace_backend.services import (
 
 
 async def evaluate(input_path: Path, output_dir: Path, concurrency: int) -> int:
-    load_dotenv(ROOT / ".env")
     if input_path.is_dir():
         uploaded = [
             (path.name, path.read_bytes())
