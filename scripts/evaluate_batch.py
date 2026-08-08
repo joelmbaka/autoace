@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from dotenv import load_dotenv
 
+from autoace_backend.metrics import emotional_tone_metrics
 from autoace_backend.services import (
     GeminiAnalyzer,
     build_validation_summary,
@@ -69,6 +70,11 @@ async def evaluate(input_path: Path, output_dir: Path, concurrency: int) -> int:
         rows.append(row)
 
     summary = build_validation_summary(comparisons)
+    if summary is not None:
+        summary["emotional_tone_metrics"] = emotional_tone_metrics(
+            summary["emotional_tone_confusion_matrix"]
+        )
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     (output_dir / "predictions.json").write_text(
