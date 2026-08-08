@@ -4,7 +4,12 @@ import argparse
 import asyncio
 import csv
 import json
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
 
@@ -17,7 +22,7 @@ from autoace_backend.services import (
 
 
 async def evaluate(input_path: Path, output_dir: Path, concurrency: int) -> int:
-    load_dotenv()
+    load_dotenv(ROOT / ".env")
     if input_path.is_dir():
         uploaded = [
             (path.name, path.read_bytes())
