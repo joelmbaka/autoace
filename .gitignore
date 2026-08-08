@@ -4,8 +4,25 @@ __pycache__/
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
-# Virtual environments
-.venv
+# Virtual environments and secrets
+.venv/
 .env
+.env.local
+.env.*.local
+
+# Generated evaluation artifacts
+artifacts/
+
+# Local assessment data should not be committed
+labels.csv
+*.zip
+
+# IDE/OS
+.DS_Store
+.vscode/
+.idea/
