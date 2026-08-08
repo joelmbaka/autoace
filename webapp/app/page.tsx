@@ -119,6 +119,8 @@ export default function Home() {
   const folderInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // Session storage is client-only, so restore it after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setToken(sessionStorage.getItem("autoace_access_token"));
     folderInput.current?.setAttribute("webkitdirectory", "");
     folderInput.current?.setAttribute("directory", "");
