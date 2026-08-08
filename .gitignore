@@ -18,9 +18,16 @@ wheels/
 # Generated evaluation artifacts
 artifacts/
 
-# Local assessment data should not be committed
+# Local/confidential assessment data should not be committed
 labels.csv
 *.zip
+*.ogg
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.webm
 
 # IDE/OS
 .DS_Store
