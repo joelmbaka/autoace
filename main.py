@@ -7,11 +7,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 from autoace_backend.services import GeminiAnalyzer, SUPPORTED_AUDIO_TYPES
 
 
 async def run(audio_path: Path) -> int:
-    load_dotenv()
     if not audio_path.is_file():
         raise SystemExit(f"Audio file not found: {audio_path}")
 
