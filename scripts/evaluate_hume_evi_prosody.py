@@ -70,6 +70,23 @@ WATCHLIST = (
 )
 
 
+class SegmentWaitError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: str,
+        interim_count: int,
+        final_count: int,
+        interim_transcripts: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.interim_count = interim_count
+        self.final_count = final_count
+        self.interim_transcripts = interim_transcripts or []
+
+
 def _session_settings_payload() -> dict[str, Any]:
     return {
         "type": "session_settings",
@@ -423,7 +440,9 @@ async def _receive_events(
             trace.append({"type": "invalid_payload"})
             continue
         trace.append(_safe_event(payload))
-        await queue.put(payload)
+        queued_payload = dict(payload)
+        queued_payload["_event_sequence"] = len(trace)
+        await queue.put(queued_payload)
 
 
 async def _wait_for_chat_metadata(
@@ -443,10 +462,18 @@ async def _wait_for_chat_metadata(
 
 
 async def _wait_for_final_user_message(
-    queue: asyncio.Queue[dict[str, Any]], timeout_seconds: float
-) -> tuple[dict[str, Any], int]:
+    queue: asyncio.Queue[dict[str, Any]],
+    timeout_seconds: float,
+    *,
+    after_sequence: int = 0,
+    previous_final_transcript: str = "",
+    unresolved_interim_transcripts: list[str] | None = None,
+) -> tuple[dict[str, Any], int, int]:
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     interim_count = 0
+    final_count = 0
+    interim_transcripts: list[str] = []
+    unresolved = unresolved_interim_transcripts or []
     while True:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
@@ -455,7 +482,13 @@ async def _wait_for_final_user_message(
                 if interim_count
                 else "No interim user_message ever observed"
             )
-            raise RuntimeError(f"Timed out waiting for final Hume EVI user_message: {detail}.")
+            raise SegmentWaitError(
+                f"Timed out waiting for final Hume EVI user_message: {detail}.",
+                status=("interim_without_final" if interim_count else "no_speech_detected"),
+                interim_count=interim_count,
+                final_count=final_count,
+                interim_transcripts=interim_transcripts,
+            )
         try:
             payload = await asyncio.wait_for(queue.get(), timeout=remaining)
         except TimeoutError as exc:
@@ -464,18 +497,56 @@ async def _wait_for_final_user_message(
                 if interim_count
                 else "No interim user_message ever observed"
             )
-            raise RuntimeError(
-                f"Timed out waiting for final Hume EVI user_message: {detail}."
+            raise SegmentWaitError(
+                f"Timed out waiting for final Hume EVI user_message: {detail}.",
+                status=("interim_without_final" if interim_count else "no_speech_detected"),
+                interim_count=interim_count,
+                final_count=final_count,
+                interim_transcripts=interim_transcripts,
             ) from exc
+        if (
+            "_event_sequence" in payload
+            and int(payload.get("_event_sequence") or 0) <= after_sequence
+        ):
+            continue
         msg_type = payload.get("type")
         if msg_type == "error":
-            raise _hume_error(payload)
+            error = _hume_error(payload)
+            raise SegmentWaitError(
+                str(error),
+                status="provider_error",
+                interim_count=interim_count,
+                final_count=final_count,
+                interim_transcripts=interim_transcripts,
+            ) from error
         if msg_type != "user_message":
             continue
         if payload.get("interim"):
             interim_count += 1
+            text = _message_text(payload)
+            if text:
+                interim_transcripts.append(text)
             continue
-        return payload, interim_count
+        final_count += 1
+        final_text = _message_text(payload)
+        relates_to_current = any(
+            _transcripts_related(final_text, text) for text in interim_transcripts
+        )
+        obviously_stale = (
+            bool(final_text)
+            and (
+                final_text == previous_final_transcript
+                or any(_transcripts_related(final_text, text) for text in unresolved)
+            )
+            and not relates_to_current
+        )
+        if obviously_stale:
+            continue
+        return payload, interim_count, final_count
+
+
+def _transcripts_related(left: str, right: str) -> bool:
+    return bool(left and right) and (left.startswith(right) or right.startswith(left))
 
 
 async def _stream_segment(
@@ -485,7 +556,10 @@ async def _stream_segment(
     *,
     realtime_factor: float,
     response_timeout_seconds: float,
-) -> tuple[dict[str, Any], int]:
+    after_sequence: int = 0,
+    previous_final_transcript: str = "",
+    unresolved_interim_transcripts: list[str] | None = None,
+) -> tuple[dict[str, Any], int, int]:
     sleep_seconds = (CHUNK_MS / 1000.0) * realtime_factor
     for offset in range(0, len(pcm), CHUNK_BYTES):
         chunk = pcm[offset : offset + CHUNK_BYTES]
@@ -522,7 +596,13 @@ async def _stream_segment(
             await asyncio.sleep(sleep_seconds)
 
     # The finalized-turn timeout starts only after all speech and silence is sent.
-    return await _wait_for_final_user_message(queue, response_timeout_seconds)
+    return await _wait_for_final_user_message(
+        queue,
+        response_timeout_seconds,
+        after_sequence=after_sequence,
+        previous_final_transcript=previous_final_transcript,
+        unresolved_interim_transcripts=unresolved_interim_transcripts,
+    )
 
 
 async def _analyze_call(
@@ -616,6 +696,7 @@ async def _analyze_call(
     aggregate_weighted: defaultdict[str, float] = defaultdict(float)
     total_weight = 0.0
     previous_final_transcript = ""
+    unresolved_interim_transcripts: list[str] = []
 
     async with websockets.connect(url, max_size=16 * 1024 * 1024) as ws:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -627,39 +708,80 @@ async def _analyze_call(
             # are paused, avoiding irrelevant generated speech during this diagnostic.
             await ws.send(json.dumps({"type": "pause_assistant_message"}))
 
-            for segment, pcm in prepared_segments:
+            for index, (segment, pcm) in enumerate(prepared_segments):
                 start = float(segment["start"])
                 end = float(segment["end"])
                 duration = max(0.0, end - start)
-                message, interim_count = await _stream_segment(
-                    ws,
-                    queue,
-                    pcm,
-                    realtime_factor=realtime_factor,
-                    response_timeout_seconds=response_timeout_seconds,
+                trace_start = len(event_trace)
+                segment_result = dict(segment_diagnostics[index])
+                segment_result.update(
+                    {
+                        "status": None,
+                        "interim_user_message_count": 0,
+                        "final_user_message_count": 0,
+                        "raw_hume_transcript": None,
+                        "transcript_delta": None,
+                        "top_expressions": None,
+                        "watchlist_scores": None,
+                    }
                 )
-                scores = _scores_from_user_message(message)
-                if not scores:
-                    raise RuntimeError(
-                        f"{audio_path.name}: Final user_message observed, but no prosody scores."
+                try:
+                    message, interim_count, final_count = await _stream_segment(
+                        ws,
+                        queue,
+                        pcm,
+                        realtime_factor=realtime_factor,
+                        response_timeout_seconds=response_timeout_seconds,
+                        after_sequence=trace_start,
+                        previous_final_transcript=previous_final_transcript,
+                        unresolved_interim_transcripts=unresolved_interim_transcripts,
                     )
+                except SegmentWaitError as exc:
+                    unresolved_interim_transcripts.extend(exc.interim_transcripts)
+                    segment_result.update(
+                        {
+                            "status": exc.status,
+                            "error": str(exc),
+                            "interim_user_message_count": exc.interim_count,
+                            "final_user_message_count": exc.final_count,
+                            "event_sequence_start": trace_start,
+                            "event_sequence_end": len(event_trace),
+                            "safe_event_trace": event_trace[trace_start:],
+                        }
+                    )
+                    segment_results.append(segment_result)
+                    continue
+                scores = _scores_from_user_message(message)
                 raw_transcript = _message_text(message)
                 transcript_delta = _transcript_delta(
                     previous_final_transcript, raw_transcript
                 )
                 previous_final_transcript = raw_transcript
+                if not scores:
+                    segment_result.update(
+                        {
+                            "status": "final_without_prosody",
+                            "interim_user_message_count": interim_count,
+                            "final_user_message_count": final_count,
+                            "raw_hume_transcript": raw_transcript,
+                            "transcript_delta": transcript_delta,
+                            "event_sequence_start": trace_start,
+                            "event_sequence_end": len(event_trace),
+                            "safe_event_trace": event_trace[trace_start:],
+                        }
+                    )
+                    segment_results.append(segment_result)
+                    continue
 
                 for name, score in scores.items():
                     aggregate_weighted[name] += score * duration
                 total_weight += duration
 
-                segment_results.append(
+                segment_result.update(
                     {
-                        "start": round(start, 3),
-                        "end": round(end, 3),
-                        "duration": round(duration, 3),
-                        "scribe_text": segment["text"],
+                        "status": "success",
                         "interim_user_message_count": interim_count,
+                        "final_user_message_count": final_count,
                         "raw_hume_transcript": raw_transcript,
                         "transcript_delta": transcript_delta,
                         "top_expressions": sorted(
@@ -669,23 +791,43 @@ async def _analyze_call(
                             label: scores[label] for label in WATCHLIST if label in scores
                         },
                         "all_expression_scores": scores,
+                        "event_sequence_start": trace_start,
+                        "event_sequence_end": len(event_trace),
+                        "safe_event_trace": event_trace[trace_start:],
                     }
                 )
+                segment_results.append(segment_result)
         finally:
             receiver.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await receiver
 
-    if not segment_results or total_weight <= 0:
-        raise RuntimeError(f"{audio_path.name}: no customer prosody results were produced.")
-
-    aggregate = {
-        name: score / total_weight for name, score in aggregate_weighted.items()
-    }
+    aggregate = (
+        {name: score / total_weight for name, score in aggregate_weighted.items()}
+        if total_weight > 0
+        else {}
+    )
+    successful_count = sum(
+        segment.get("status") == "success" for segment in segment_results
+    )
+    total_customer_duration = sum(durations)
     return {
         "name": audio_path.name,
         **diagnostic_state,
+        "error": None
+        if successful_count
+        else f"{audio_path.name}: no customer segments produced prosody scores.",
         "customer_speech_duration_seconds": round(total_weight, 3),
+        "successful_segment_count": successful_count,
+        "failed_segment_count": len(segment_results) - successful_count,
+        "successful_customer_speech_duration": round(total_weight, 3),
+        "total_customer_speech_duration": round(total_customer_duration, 3),
+        "coverage_percentage": round(
+            (total_weight / total_customer_duration * 100.0)
+            if total_customer_duration > 0
+            else 0.0,
+            2,
+        ),
         "segments": segment_results,
         "aggregate_top_expressions": sorted(
             aggregate.items(), key=lambda item: item[1], reverse=True
@@ -714,6 +856,13 @@ def _load_expected(path: Path) -> dict[str, dict[str, Any]]:
     return expected
 
 
+def _select_audio_paths(input_dir: Path, only: str | None) -> list[Path]:
+    audio_paths = sorted(input_dir.glob("*.ogg"))
+    if only:
+        audio_paths = [path for path in audio_paths if path.name == only]
+    return audio_paths
+
+
 async def main_async(args: argparse.Namespace) -> int:
     load_dotenv(ROOT / ".env")
     api_key = os.getenv("HUME_API_KEY")
@@ -736,9 +885,10 @@ async def main_async(args: argparse.Namespace) -> int:
         if isinstance(row, dict) and not row.get("error")
     }
 
-    audio_paths = sorted(args.input_dir.glob("*.ogg"))
+    audio_paths = _select_audio_paths(args.input_dir, args.only)
     if not audio_paths:
-        raise RuntimeError(f"No OGG files found in {args.input_dir}")
+        detail = f" matching --only {args.only!r}" if args.only else ""
+        raise RuntimeError(f"No OGG files found in {args.input_dir}{detail}")
 
     blind_rows: list[dict[str, Any]] = []
     trace_rows: list[dict[str, Any]] = []
@@ -827,6 +977,10 @@ def main() -> int:
         )
     )
     parser.add_argument("input_dir", type=Path, nargs="?", default=Path("."))
+    parser.add_argument(
+        "--only",
+        help="Run one OGG filename only, preserving the same blind-before-label flow.",
+    )
     parser.add_argument(
         "--scribe-artifact",
         type=Path,
