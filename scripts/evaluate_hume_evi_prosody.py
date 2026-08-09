@@ -66,6 +66,17 @@ WATCHLIST = (
 )
 
 
+def _session_settings_payload() -> dict[str, Any]:
+    return {
+        "type": "session_settings",
+        "audio": {
+            "encoding": "linear16",
+            "sample_rate": SAMPLE_RATE,
+            "channels": CHANNELS,
+        },
+    }
+
+
 def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -316,18 +327,7 @@ async def _analyze_call(
     total_weight = 0.0
 
     async with websockets.connect(url, max_size=16 * 1024 * 1024) as ws:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "session_settings",
-                    "audio": {
-                        "format": "linear16",
-                        "sample_rate": SAMPLE_RATE,
-                        "channels": CHANNELS,
-                    },
-                }
-            )
-        )
+        await ws.send(json.dumps(_session_settings_payload()))
         # EVI keeps listening/transcribing/prosody-scoring while assistant responses
         # are paused, avoiding irrelevant generated speech during this diagnostic.
         await ws.send(json.dumps({"type": "pause_assistant_message"}))
