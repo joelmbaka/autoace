@@ -1,6 +1,11 @@
 import pytest
 
-from autoace_backend.hybrid_analyzer import SemanticEvidence, fuse_acoustic_fields, fuse_tone
+from autoace_backend.hybrid_analyzer import (
+    SemanticEvidence,
+    fuse_acoustic_fields,
+    fuse_tone,
+    stabilize_semantic_evidence,
+)
 from autoace_backend.schemas import AudioAnalysis
 from autoace_backend.scribe_diagnostics import ScribeDiagnosticsResult, ScribeToken
 
@@ -23,7 +28,7 @@ def evidence(**overrides):
     (0.45, {"strong_anger_or_agitation": True}, ("upset", "high")),
     (0.16, {"complaint_or_blockage": True, "semantic_intensity": "medium"}, ("frustrated", "medium")),
     (0.05, {"request_resolved": True, "positive_ending": True}, ("satisfied", "medium")),
-    (0.05, {}, ("neutral", "low")),
+    (0.05, {}, ("neutral", "medium")),
     (0.05, {"distress_or_panic": True}, ("distressed", "high")),
 ])
 def test_tone_fusion(negative, semantic, expected):
@@ -98,3 +103,102 @@ def test_persistent_background_speech_is_medium_without_forcing_overlap():
     result = fuse_acoustic_fields(baseline(), diagnostic, agent_speaker="agent", customer_speaker="customer")
     assert result["background_noise_severity"] == "medium"
     assert result["speaker_overlap_present"] is False
+
+
+def test_low_semantic_intensity_with_neutral_affect_defaults_to_medium():
+    assert fuse_tone(0.02, evidence(semantic_intensity="low")) == ("neutral", "medium")
+
+
+@pytest.mark.parametrize(
+    "description",
+    ["TV", "television", "background speech", "background talk", "radio speech", "broadcast speech"],
+)
+def test_broadcast_descriptions_canonicalize_to_tv(description):
+    diagnostic = scribe(events=(token("[beep]", "audio_event", 0, 0.2),))
+    result = fuse_acoustic_fields(
+        baseline(background_noise_type=description, background_noise_severity="low"),
+        diagnostic,
+        agent_speaker="agent",
+        customer_speaker="customer",
+    )
+    assert result["background_noise_type"] == "TV"
+
+
+def test_sustained_broadcast_description_has_medium_severity():
+    diagnostic = scribe(events=(token("[beep]", "audio_event", 0, 0.2),))
+    result = fuse_acoustic_fields(
+        baseline(
+            background_noise_type="continuous background speech",
+            background_noise_severity="low",
+        ),
+        diagnostic,
+        agent_speaker="agent",
+        customer_speaker="customer",
+    )
+    assert result["background_noise_type"] == "TV"
+    assert result["background_noise_severity"] == "medium"
+
+
+def test_intelligible_call_is_not_downgraded_by_one_quality_sample():
+    words = (
+        token("hello", "word", 1, 1.3, "agent"),
+        token("thanks", "word", 2, 2.3, "customer"),
+    )
+    diagnostic = scribe(words=words)
+    result = fuse_acoustic_fields(
+        baseline(audio_quality="slightly_impaired"),
+        diagnostic,
+        agent_speaker="agent",
+        customer_speaker="customer",
+    )
+    assert result["audio_quality"] == "clear"
+
+
+def test_accepted_next_step_and_appreciative_ending_can_be_satisfied():
+    stabilized = stabilize_semantic_evidence(
+        0.01,
+        evidence(complaint_or_blockage=True),
+        transcript="I am transferring you to an advisor now. Thank you.",
+        customer_transcript="Okay. Yes, please do. Thank you.",
+    )
+    assert stabilized.request_resolved is True
+    assert stabilized.positive_ending is True
+    assert fuse_tone(0.01, stabilized) == ("satisfied", "medium")
+
+
+def test_polite_ending_without_agreed_outcome_remains_neutral():
+    stabilized = stabilize_semantic_evidence(
+        0.01,
+        evidence(),
+        transcript="Could you check that for me? Thank you.",
+        customer_transcript="Thank you.",
+    )
+    assert stabilized.request_resolved is False
+    assert stabilized.positive_ending is False
+    assert fuse_tone(0.01, stabilized) == ("neutral", "medium")
+
+
+def test_overlap_fusion_behavior_is_unchanged():
+    words = (
+        token("hello", "word", 1, 2, "agent"),
+        token("yes", "word", 1.5, 2.2, "customer"),
+    )
+    diagnostic = scribe(words=words)
+    diagnostic.overlap_intervals = [
+        {
+            "start": 1.5,
+            "end": 2.0,
+            "duration": 0.5,
+            "speaker_a": "agent",
+            "speaker_b": "customer",
+            "text_a": "hello",
+            "text_b": "yes",
+        }
+    ]
+    result = fuse_acoustic_fields(
+        baseline(speaker_overlap_present=False),
+        diagnostic,
+        agent_speaker="agent",
+        customer_speaker="customer",
+    )
+    assert result["speaker_overlap_present"] is True

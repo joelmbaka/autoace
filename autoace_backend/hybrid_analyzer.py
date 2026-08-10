@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -22,7 +23,6 @@ SATISFIED_NEGATIVE_CEILING = 0.15
 FRUSTRATED_NEGATIVE_THRESHOLD = 0.15
 HIGH_INTENSITY_NEGATIVE_THRESHOLD = 0.30
 SEMANTIC_HIGH_NEGATIVE_THRESHOLD = 0.20
-LOW_INTENSITY_NEGATIVE_CEILING = 0.10
 PERSISTENT_NOISE_SECONDS = float(os.getenv("PERSISTENT_NOISE_SECONDS", "2"))
 LONG_SILENCE_THRESHOLD_SECONDS = float(os.getenv("LONG_SILENCE_THRESHOLD_SECONDS", "12"))
 
@@ -108,16 +108,57 @@ def fuse_tone(negative_affect: float, evidence: SemanticEvidence) -> tuple[str, 
         and negative_affect >= SEMANTIC_HIGH_NEGATIVE_THRESHOLD
     ):
         intensity = "high"
-    elif (
-        evidence.semantic_intensity == "low"
-        and negative_affect < LOW_INTENSITY_NEGATIVE_CEILING
-        and not evidence.positive_ending
-        and not evidence.request_resolved
-    ):
-        intensity = "low"
     else:
         intensity = "medium"
     return tone, intensity
+
+
+_COOPERATIVE_ENDING_PATTERNS = (
+    r"\bthank(?:s| you)\b",
+    r"\bi appreciate (?:it|that|your help)\b",
+    r"\b(?:okay|ok|yes|yep),? (?:that works|sounds good|please do)\b",
+    r"\b(?:that works|sounds good)\b",
+)
+_ACCEPTED_ACTION_PATTERNS = (
+    r"\btransferr?ing you\b",
+    r"\btransfer(?:red)? to (?:an?|the)\b",
+    r"\bappointment (?:is |has been )?(?:booked|confirmed|scheduled)\b",
+    r"\b(?:booked|confirmed|scheduled) (?:the |your |an? )?appointment\b",
+    r"\b(?:we(?:'ll| will)|i(?:'ll| will)) (?:book|schedule|transfer|arrange|send|call)\b",
+    r"\b(?:agreed|accepted) (?:plan|next step|action|appointment|transfer)\b",
+)
+
+
+def stabilize_semantic_evidence(
+    negative_affect: float,
+    evidence: SemanticEvidence,
+    *,
+    transcript: str,
+    customer_transcript: str,
+) -> SemanticEvidence:
+    """Repair a narrow resolved-positive contradiction using conversation evidence."""
+    if (
+        negative_affect >= 0.05
+        or evidence.distress_or_panic
+        or evidence.strong_anger_or_agitation
+        or evidence.repeated_failed_contact
+    ):
+        return evidence
+
+    customer_ending = customer_transcript.casefold().strip()[-240:]
+    full_transcript = transcript.casefold()
+    cooperative_ending = any(
+        re.search(pattern, customer_ending) for pattern in _COOPERATIVE_ENDING_PATTERNS
+    )
+    accepted_action = any(
+        re.search(pattern, full_transcript) for pattern in _ACCEPTED_ACTION_PATTERNS
+    )
+    if not (cooperative_ending and accepted_action):
+        return evidence
+
+    return evidence.model_copy(
+        update={"request_resolved": True, "positive_ending": True}
+    )
 
 
 def _event_texts(scribe: ScribeDiagnosticsResult) -> list[str]:
@@ -140,6 +181,59 @@ def _speaker_duration_seconds(scribe: ScribeDiagnosticsResult, speakers: set[str
     )
 
 
+_BROADCAST_NOISE_MARKERS = (
+    "tv",
+    "television",
+    "background speech",
+    "background talk",
+    "radio speech",
+    "broadcast speech",
+)
+_SUSTAINED_NOISE_MARKERS = ("continuous", "sustained", "constant", "ongoing")
+_TECHNICAL_DEGRADATION_MARKERS = (
+    "clipping",
+    "clipped",
+    "distortion",
+    "distorted",
+    "packet loss",
+    "robotic",
+    "muffled",
+    "garbled",
+    "unintelligible",
+    "low volume",
+)
+
+
+def _contains_marker(text: str, markers: tuple[str, ...]) -> bool:
+    normalized = text.casefold()
+    return any(re.search(rf"\b{re.escape(marker)}\b", normalized) for marker in markers)
+
+
+def _stabilize_audio_quality(
+    baseline: AudioAnalysis,
+    scribe: ScribeDiagnosticsResult,
+    *,
+    noise_severity: str,
+) -> str:
+    if baseline.audio_quality == "clear":
+        return "clear"
+
+    evidence_text = " ".join(
+        [baseline.background_noise_type, *[event.text for event in scribe.audio_events]]
+    )
+    technical_degradation = _contains_marker(
+        evidence_text, _TECHNICAL_DEGRADATION_MARKERS
+    )
+    usable_transcript = (
+        bool(scribe.transcript.strip())
+        and bool(scribe.spoken_words)
+        and len(scribe.speaker_ids) >= 2
+    )
+    if usable_transcript and not technical_degradation and noise_severity != "high":
+        return "clear"
+    return baseline.audio_quality
+
+
 def fuse_acoustic_fields(
     baseline: AudioAnalysis,
     scribe: ScribeDiagnosticsResult,
@@ -159,6 +253,15 @@ def fuse_acoustic_fields(
         duration = _speaker_duration_seconds(scribe, extra_speakers)
         noise_present, noise_type = True, "TV"
         noise_severity = "medium" if duration >= PERSISTENT_NOISE_SECONDS else "low"
+    elif baseline.background_noise_present and _contains_marker(
+        baseline.background_noise_type, _BROADCAST_NOISE_MARKERS
+    ):
+        noise_present, noise_type = True, "TV"
+        noise_severity = baseline.background_noise_severity
+        if _contains_marker(
+            baseline.background_noise_type, _SUSTAINED_NOISE_MARKERS
+        ):
+            noise_severity = "medium" if noise_severity == "low" else noise_severity
     elif not events and set(scribe.speaker_ids) == {agent_speaker, customer_speaker}:
         noise_present, noise_type, noise_severity = False, "", "none"
     else:
@@ -166,7 +269,10 @@ def fuse_acoustic_fields(
         noise_type = baseline.background_noise_type if noise_present else ""
         noise_severity = baseline.background_noise_severity if noise_present else "none"
 
-    if noise_present and baseline.audio_quality == "severely_impaired":
+    audio_quality = _stabilize_audio_quality(
+        baseline, scribe, noise_severity=noise_severity
+    )
+    if noise_present and audio_quality == "severely_impaired":
         noise_severity = "high"
 
     overlap = baseline.speaker_overlap_present or bool(scribe.overlap_intervals)
@@ -178,7 +284,7 @@ def fuse_acoustic_fields(
         "background_noise_present": noise_present,
         "background_noise_type": noise_type,
         "background_noise_severity": noise_severity,
-        "audio_quality": baseline.audio_quality,
+        "audio_quality": audio_quality,
         "speaker_overlap_present": overlap,
         "long_silence_present": long_silence,
     }
@@ -242,6 +348,12 @@ class HybridAnalyzer:
         except (errors.APIError, ValidationError) as exc:
             raise RuntimeError(f"Hybrid provider/structured-output failure: {exc}") from exc
 
+        evidence = stabilize_semantic_evidence(
+            emotion.negative_affect,
+            evidence,
+            transcript=scribe.transcript,
+            customer_transcript=customer_transcript,
+        )
         tone, intensity = fuse_tone(emotion.negative_affect, evidence)
         acoustics = fuse_acoustic_fields(
             baseline.result,
