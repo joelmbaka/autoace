@@ -1,4 +1,5 @@
 {
+  "artifact_status": "historical label-isolated local blind benchmark; superseded by final_production_results.json",
   "baseline": {"system": "Gemini-only", "correct": 10, "total": 24, "accuracy": 0.4166666667},
   "hybrid": {"system": "Scribe + emotion2vec + Gemini + deterministic fusion", "correct": 20, "total": 24, "accuracy": 0.8333333333},
   "per_field": {

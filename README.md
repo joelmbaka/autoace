@@ -2,6 +2,10 @@
 
 Hosted batch-analysis implementation for the AutoAce AI technical trial. The system accepts the required evaluation folder/ZIP, validates `labels.csv`, analyzes each valid audio file independently, streams progress to a browser dashboard, and exports predictions as CSV or JSON using the required schema.
 
+Production dashboard: https://autoace-sigma.vercel.app
+
+Production backend: https://autoace-api.vercel.app
+
 ## Architecture
 
 ```text
@@ -153,6 +157,14 @@ uv run python scripts/evaluate_hybrid.py compare \
 
 Local recordings, labels, `.env`, and generated artifacts are ignored by Git. Sanitized aggregate results are published under `docs/results/`.
 
+## Final production validation
+
+The final complete authenticated dashboard run used the production model string `hybrid:gemini-3.6-flash+scribe+emotion2vec` and completed all three supplied development calls with no file failures. It scored **21/24 exact discrete fields (87.5%)**; the dashboard rounds that aggregate display to **88%**. Per-call results were `call_001` 8/8, `call_002` 6/8, and `call_003` 7/8.
+
+Emotional tone and intensity, noise presence/type, audio quality, and long silence were each correct for all three calls. Noise severity was correct for 2/3, and speaker overlap for 1/3. The three misses were `call_002` noise severity (`low` rather than `medium`) and speaker overlap (`false` rather than `true`), plus `call_003` speaker overlap (`false` rather than `true`).
+
+The represented emotional-tone classes had a perfect confusion matrix: upset→upset, neutral→neutral, and satisfied→satisfied. There were no supplied examples of frustrated or distressed, so this does not measure recall for those classes. With only three development calls, the result is not statistically meaningful evidence of production-wide accuracy. The earlier label-isolated local blind run of **20/24 (83.3%)** remains documented as a historical iteration benchmark; the Gemini-only baseline was **10/24 (41.7%)**.
+
 ## Baseline evaluation
 
 The retained Gemini-only baseline can be evaluated against a folder or ZIP:
@@ -191,19 +203,33 @@ The production endpoint uses `HybridAnalyzer`. Affect, persistent-noise, and abn
 
 ## Cost constraint
 
-The trial ceiling is **$0.003 per audio minute**. Do not report the free-tier invoice (`$0`) as production cost. Use measured token usage from `run_details.json` with the provider's paid production rates and audio duration.
+The trial ceiling is **$0.003 per audio minute**. The selected accuracy-first production architecture **does not meet this target**. The free-tier development invoice (`$0`) is not a production-cost estimate.
 
-For Gemini 3.6 Flash, the hosted interactive API and the lower-cost Batch/Flex consumption modes have different token prices. If 3.6 Flash is retained after accuracy testing, the production cost analysis should use the batch-oriented consumption mode appropriate to this offline workload and verify that total input + output/thinking cost remains below the ceiling. A lower-cost audio-capable model can be selected with `GEMINI_MODEL` if validation shows an acceptable accuracy/cost tradeoff.
+At official paid rates checked 2026-08-10, [ElevenLabs Scribe v2 costs $0.22/hour](https://elevenlabs.io/pricing/api?price.section=speech_to_text), or approximately **$0.003667/audio-minute**. Scribe alone therefore exceeds the complete trial ceiling. [Gemini 3.6 Flash pricing](https://ai.google.dev/gemini-api/docs/pricing) is $1.50/M input tokens and $7.50/M output tokens including thinking on Standard, or $0.75/M input and $3.75/M output on Batch/Flex.
+
+The final 3.963-minute production run exposed 2,842 semantic input tokens and 243 semantic output tokens, costing approximately $0.0060855 at Gemini Standard rates, or **$0.001535/audio-minute**. Raw-audio input at the documented approximate 1,920 audio tokens/minute adds about **$0.002880/audio-minute** at Standard rates. Together with Scribe, the defensible known lower bound is therefore approximately **$0.00808/audio-minute**. Actual cost is somewhat higher because this lower bound excludes raw-audio prompt text, raw-audio output/thinking tokens, and Modal emotion2vec compute. No exact total is claimed without complete instrumentation.
+
+Even Batch/Flex Gemini pricing cannot bring this architecture under the trial target because Scribe alone costs approximately $0.003667/min. Selecting it is an explicit accuracy/cost trade-off in favor of the stronger validated result.
+
+### Unshipped cost-optimization experiment
+
+A separate prototype replaced Scribe and both Gemini 3.6 calls with one Gemini 3.5 Flash-Lite raw-audio evidence call plus the existing Modal emotion2vec service. It was deliberately not selected or deployed. On a cost-only `call_002` trial it used 1,387 input and 187 output tokens: Gemini cost approximately $0.001516/audio-minute, and the conservative Modal HTTP-duration upper bound approximately $0.001548/audio-minute, for a combined upper bound of **$0.003065/audio-minute**. At [Modal's published CPU and memory rates](https://modal.com/pricing), its reported 1.007 seconds of service-side compute would put the measured-compute combination near $0.001577/audio-minute.
+
+The conservative gate was still missed, response compression changed acoustic predictions, and the resulting call scored only 4/8 fields. The experiment was stopped without a full three-call labeled run or label-driven tuning. It demonstrates a plausible lower-cost direction that requires further validation, not compliance with the current trial target.
 
 ## Data handling
 
 Production-call audio is confidential. The application does not persist uploaded audio, transcripts, or labels to a database; request data is held only for the request lifetime. Audio is sent to configured Gemini, ElevenLabs, and Modal services, so production must use AutoAce-approved accounts, regions, tiers, and retention/training controls. Local recordings, manifests, credentials, and raw artifacts are excluded from Git.
+
+No supplied audio or `labels.csv` is tracked in this repository. Provider-side handling remains governed by the configured account, tier, retention, and training settings.
 
 ## Vercel deployment
 
 ### Backend project
 
 Create a Vercel project with repository root `/`. `api/index.py` exposes the FastAPI app and `vercel.json` rewrites requests to it.
+
+The production backend is https://autoace-api.vercel.app. It is deployed through the Vercel CLI and its Vercel project is not connected to GitHub; pushing this repository does not deploy the backend automatically.
 
 Set:
 
@@ -228,6 +254,8 @@ Create a second Vercel project with Root Directory `webapp` and set:
 ```text
 NEXT_PUBLIC_API_URL=https://<backend-domain>
 ```
+
+The production dashboard is https://autoace-sigma.vercel.app.
 
 After the dashboard domain is known, add it to backend `ALLOWED_ORIGINS` and redeploy the backend.
 

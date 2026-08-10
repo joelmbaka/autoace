@@ -1,0 +1,61 @@
+{
+  "evaluation": "final complete authenticated production-dashboard development-set run",
+  "model": "hybrid:gemini-3.6-flash+scribe+emotion2vec",
+  "labels_used_during_inference": false,
+  "files": {"completed": 3, "failed": 0},
+  "exact_fields": {"correct": 21, "total": 24, "accuracy": 0.875, "dashboard_rounded_percent": 88},
+  "audio": {"total_seconds_approximate": 237.8, "total_minutes_approximate": 3.963},
+  "latency": {"total_request_seconds": 119.595, "mean_request_seconds": 39.865},
+  "calls": [
+    {
+      "name": "call_001.ogg",
+      "prediction": {"emotional_tone": "upset", "emotional_intensity": "high", "background_noise_present": false, "background_noise_type": "", "background_noise_severity": "none", "audio_quality": "clear", "speaker_overlap_present": false, "long_silence_present": false, "confidence": 0.9},
+      "correct_fields": 8,
+      "total_fields": 8,
+      "request_seconds": 37.134,
+      "semantic_gemini_usage": {"input_tokens": 683, "output_tokens": 81}
+    },
+    {
+      "name": "call_002.ogg",
+      "prediction": {"emotional_tone": "neutral", "emotional_intensity": "medium", "background_noise_present": true, "background_noise_type": "TV", "background_noise_severity": "low", "audio_quality": "clear", "speaker_overlap_present": false, "long_silence_present": false, "confidence": 0.9},
+      "correct_fields": 6,
+      "total_fields": 8,
+      "request_seconds": 35.128,
+      "semantic_gemini_usage": {"input_tokens": 642, "output_tokens": 81}
+    },
+    {
+      "name": "call_003.ogg",
+      "prediction": {"emotional_tone": "satisfied", "emotional_intensity": "medium", "background_noise_present": true, "background_noise_type": "sharp static", "background_noise_severity": "medium", "audio_quality": "clear", "speaker_overlap_present": false, "long_silence_present": false, "confidence": 0.95},
+      "correct_fields": 7,
+      "total_fields": 8,
+      "request_seconds": 47.333,
+      "semantic_gemini_usage": {"input_tokens": 1517, "output_tokens": 81}
+    }
+  ],
+  "per_field": {
+    "emotional_tone": {"correct": 3, "total": 3},
+    "emotional_intensity": {"correct": 3, "total": 3},
+    "background_noise_present": {"correct": 3, "total": 3},
+    "background_noise_type": {"correct": 3, "total": 3},
+    "background_noise_severity": {"correct": 2, "total": 3},
+    "audio_quality": {"correct": 3, "total": 3},
+    "speaker_overlap_present": {"correct": 1, "total": 3},
+    "long_silence_present": {"correct": 3, "total": 3}
+  },
+  "tone_confusion_matrix": {
+    "labels": ["neutral", "satisfied", "upset"],
+    "expected_rows_predicted_columns": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    "unrepresented_classes": ["frustrated", "distressed"]
+  },
+  "misses": [
+    {"name": "call_002.ogg", "field": "background_noise_severity", "predicted": "low", "expected": "medium"},
+    {"name": "call_002.ogg", "field": "speaker_overlap_present", "predicted": false, "expected": true},
+    {"name": "call_003.ogg", "field": "speaker_overlap_present", "predicted": false, "expected": true}
+  ],
+  "limitations": [
+    "This supplied labeled development set contains only three calls.",
+    "Frustrated and distressed are not represented, so their recall is not measured.",
+    "This result is not a claim of production-wide accuracy."
+  ],
+  "contains_audio_or_transcripts": false
+}

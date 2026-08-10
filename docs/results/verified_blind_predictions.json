@@ -1,5 +1,5 @@
 {
-  "evaluation": "verified blind three-call assessment",
+  "evaluation": "historical verified blind three-call assessment; superseded by final_production_results.json",
   "labels_used_during_inference": false,
   "verified_exact_fields": {"correct": 20, "total": 24, "accuracy": 0.8333333333},
   "calls": [
