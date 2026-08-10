@@ -1,0 +1,33 @@
+{
+  "evaluation": "verified blind three-call assessment",
+  "labels_used_during_inference": false,
+  "verified_exact_fields": {"correct": 20, "total": 24, "accuracy": 0.8333333333},
+  "calls": [
+    {
+      "name": "call_001.ogg",
+      "prediction": {"emotional_tone": "upset", "emotional_intensity": "high", "background_noise_present": false, "background_noise_type": "", "background_noise_severity": "none", "audio_quality": "clear", "speaker_overlap_present": false, "long_silence_present": false},
+      "semantic_evidence": {"request_resolved": false, "positive_ending": false, "complaint_or_blockage": true, "repeated_failed_contact": true, "distress_or_panic": false, "strong_anger_or_agitation": false, "semantic_intensity": "medium"},
+      "emotion2vec_affect": {"negative": 0.4643093159, "positive": 0.3712776383, "neutral": 0.0485263368},
+      "correct_fields": 8
+    },
+    {
+      "name": "call_002.ogg",
+      "prediction": {"emotional_tone": "neutral", "emotional_intensity": "medium", "background_noise_present": true, "background_noise_type": "TV", "background_noise_severity": "medium", "audio_quality": "clear", "speaker_overlap_present": false, "long_silence_present": false},
+      "semantic_evidence": {"request_resolved": false, "positive_ending": false, "complaint_or_blockage": true, "repeated_failed_contact": false, "distress_or_panic": false, "strong_anger_or_agitation": true, "semantic_intensity": "high"},
+      "emotion2vec_affect": {"negative": 0.0486942317, "positive": 0.2523318867, "neutral": 0.6970613429},
+      "correct_fields": 7
+    },
+    {
+      "name": "call_003.ogg",
+      "prediction": {"emotional_tone": "neutral", "emotional_intensity": "low", "background_noise_present": true, "background_noise_type": "sharp static", "background_noise_severity": "medium", "audio_quality": "clear", "speaker_overlap_present": false, "long_silence_present": false},
+      "semantic_evidence": {"request_resolved": false, "positive_ending": false, "complaint_or_blockage": true, "repeated_failed_contact": false, "distress_or_panic": false, "strong_anger_or_agitation": false, "semantic_intensity": "low"},
+      "emotion2vec_affect": {"negative": 0.0153826328, "positive": 0.0130008563, "neutral": 0.9383778278},
+      "correct_fields": 5
+    }
+  ],
+  "limitations": [
+    "The supplied set contains only three calls.",
+    "The final semantic-prompt clarification was not re-evaluated because the Gemini daily quota was exhausted.",
+    "Speaker-overlap annotations remained ambiguous and were not forced without timestamp or audio evidence."
+  ]
+}

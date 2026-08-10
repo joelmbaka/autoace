@@ -1,0 +1,20 @@
+{
+  "baseline": {"system": "Gemini-only", "correct": 10, "total": 24, "accuracy": 0.4166666667},
+  "hybrid": {"system": "Scribe + emotion2vec + Gemini + deterministic fusion", "correct": 20, "total": 24, "accuracy": 0.8333333333},
+  "per_field": {
+    "emotional_tone": {"correct": 2, "total": 3},
+    "emotional_intensity": {"correct": 2, "total": 3},
+    "background_noise_present": {"correct": 3, "total": 3},
+    "background_noise_type": {"correct": 3, "total": 3},
+    "background_noise_severity": {"correct": 3, "total": 3},
+    "audio_quality": {"correct": 3, "total": 3},
+    "speaker_overlap_present": {"correct": 1, "total": 3},
+    "long_silence_present": {"correct": 3, "total": 3}
+  },
+  "tone_confusion_matrix": {
+    "labels": ["neutral", "satisfied", "upset"],
+    "expected_rows_predicted_columns": [[1, 0, 0], [1, 0, 0], [0, 0, 1]]
+  },
+  "verified": true,
+  "contains_audio_or_transcripts": false
+}

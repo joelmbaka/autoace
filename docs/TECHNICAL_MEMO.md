@@ -4,7 +4,7 @@
 
 This submission treats the problem as **offline production-call classification**, not a live telephony problem. The hosted dashboard accepts the required ZIP/folder batch and CSV manifest, validates the batch, analyzes valid recordings independently with bounded concurrency, streams progress, and exports the required `name,result_json` results as CSV or JSON.
 
-The inference layer is intentionally isolated from transport/UI concerns so the same classifier can later be called from an internal AutoAce workflow using a call ID or recording URL rather than manual upload.
+The inference layer is intentionally isolated from transport/UI concerns so the same classifier can later be called from an internal AutoAce workflow using a call ID or recording URL rather than manual upload. The verified final hybrid result is **20/24 exact discrete fields (83.3%)**, compared with **10/24 (41.7%)** for the Gemini-only baseline.
 
 ## Classification contract
 
@@ -36,25 +36,52 @@ Observed baseline examples before reading the supplied labels:
 
 These results are retained as an experiment rather than hidden: they motivated tighter operational definitions and demonstrate why validation is necessary before treating a general multimodal model as a production classifier.
 
-### B. Taxonomy-constrained raw-audio classifier
+### B. Final hybrid classifier
 
-The implemented candidate uses the same raw-audio modality but grounds every field in the assignment's operational definitions. The model is instructed to infer the **customer** role, distinguish normal turn-taking from meaningful overlap, distinguish phone artifacts from meaningful non-speech noise, treat audio quality separately from noise, and reserve `long_silence_present` for operationally unusual dead air.
+The production candidate separates specialist evidence instead of allowing one general-purpose model to decide every field:
 
-The model and thinking level are environment-configurable so the same harness can compare Gemini 3.6 Flash with lower-cost audio-capable models without changing application code.
+- ElevenLabs Scribe supplies diarization, transcript, word timestamps, audio events, overlap timing, and silence structure.
+- Role-based selection isolates customer speech without using supplied labels.
+- Modal-hosted emotion2vec supplies duration-weighted acoustic affect for customer-only segments.
+- Gemini supplies structured customer-semantic evidence and selected raw-audio evidence.
+- Named deterministic fusion rules combine tone, intensity, persistent noise, audio quality, overlap, and dead-air evidence.
 
-Final labeled-set metrics should be generated reproducibly with:
+The verified blind run produced:
+
+| Field | Correct | Accuracy |
+| --- | ---: | ---: |
+| Emotional tone | 2 / 3 | 66.7% |
+| Emotional intensity | 2 / 3 | 66.7% |
+| Background-noise presence | 3 / 3 | 100% |
+| Background-noise type | 3 / 3 | 100% |
+| Background-noise severity | 3 / 3 | 100% |
+| Audio quality | 3 / 3 | 100% |
+| Speaker overlap | 1 / 3 | 33.3% |
+| Long silence | 3 / 3 | 100% |
+| **All discrete fields** | **20 / 24** | **83.3%** |
+
+Per-call exact results were 8/8, 7/8, and 5/8. The emotional-tone confusion matrix was:
+
+| Expected / Predicted | neutral | satisfied | upset |
+| --- | ---: | ---: | ---: |
+| neutral | 1 | 0 | 0 |
+| satisfied | 1 | 0 | 0 |
+| upset | 0 | 0 | 1 |
+
+Reproduce the label-isolated workflow with:
 
 ```bash
-uv run python scripts/evaluate_batch.py /path/to/evaluation_batch --output-dir artifacts/evaluation
+uv run python scripts/evaluate_hybrid.py blind /path/to/audio_folder artifacts/hybrid/blind_predictions.json
+uv run python scripts/evaluate_hybrid.py compare artifacts/hybrid/blind_predictions.json /path/to/labels.csv artifacts/hybrid/labeled_comparison.json
 ```
 
-The generated `run_details.json` contains exact field accuracy, per-field accuracy, emotional-tone confusion matrix, per-class precision/recall/F1, and macro F1. The three supplied calls are too small to support statistically strong claims; in particular, not every emotional-tone class has development-set support. Hidden-set performance should therefore be treated as the primary evaluation.
+The blind artifact is written before `labels.csv` is opened. Labels are never used during customer identification, provider inference, or deterministic fusion. The three supplied calls are too small for statistically strong generalization claims and do not cover every emotional-tone class.
 
-## Why raw audio rather than transcription-only classification
+One final semantic-prompt clarification was made after this verified run to define an accepted workable next step as resolution. Gemini's free-tier daily quota was exhausted before the complete three-call run could be repeated, so that refinement is **not included** in the 20/24 metric. No unverified improvement is claimed.
 
-Several required outputs are acoustic, not textual: background noise, technical degradation, overlap, and dead air. A transcript-only pipeline necessarily discards evidence needed for those labels. Direct audio understanding keeps semantic speech content and acoustic context in one inference request.
+## Why a hybrid rather than transcription-only classifier
 
-A future ensemble could combine a specialized acoustic/event model with a separate transcript/semantic classifier if a larger labeled corpus shows a measurable improvement that justifies the extra cost and operational complexity.
+Several required outputs are acoustic, not textual: background noise, technical degradation, overlap, and dead air. A transcript-only pipeline necessarily discards evidence needed for those labels. The hybrid preserves acoustic evidence while using transcription for customer-role isolation and semantic context. Deterministic fusion makes threshold behavior testable and prevents one model's mistaken keyword interpretation from automatically controlling the final label.
 
 ## Batch and failure handling
 

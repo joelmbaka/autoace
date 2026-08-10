@@ -18,8 +18,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .schemas import LoginRequest, LoginResponse
+from .hybrid_analyzer import HybridAnalyzer
 from .services import (
-    GeminiAnalyzer,
     build_validation_summary,
     compare_prediction,
     prepare_batch,
@@ -160,7 +160,7 @@ async def analyze_batch(
 
     try:
         batch = prepare_batch(uploaded)
-        analyzer = GeminiAnalyzer()
+        analyzer = HybridAnalyzer()
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -33,3 +33,4 @@ labels.csv
 .DS_Store
 .vscode/
 .idea/
+.vercel

@@ -9,14 +9,16 @@ Evaluator browser (Next.js)
         |
         | login + multipart batch
         v
-FastAPI / Vercel
+FastAPI / Vercel (`HybridAnalyzer`)
         |
         |-- validate ZIP/folder + CSV manifest
         |-- isolate malformed/missing files
         |-- bounded concurrent analysis (default 3)
-        v
-Gemini raw-audio classifier
-        |
+        |-- Scribe transcript, diarization, events, timing
+        |-- customer-role inference and customer-only segments
+        |-- Modal emotion2vec customer acoustic affect
+        |-- Gemini semantic and selected raw-audio evidence
+        |-- deterministic tone and acoustic fusion
         v
 Pydantic-validated AutoAce JSON
         |
@@ -26,7 +28,7 @@ Pydantic-validated AutoAce JSON
 Results table + CSV/JSON downloads
 ```
 
-`result_json` is parsed only after batch ingestion for validation. It is never included in the Gemini prompt or model request.
+`result_json` is used only after a prediction exists for optional validation. Labels are never used by customer-role inference, provider prompts, thresholds, or any other inference step. `GeminiAnalyzer` remains available as the documented baseline.
 
 ## Required output
 
@@ -78,6 +80,8 @@ Required for inference:
 
 ```text
 GEMINI_API_KEY=...
+ELEVENLABS_API_KEY=...
+EMOTION_SERVICE_URL=https://mbakajoe26--autoace-emotion-service-emotionmodel-predict.modal.run
 ```
 
 Local login defaults are `evaluator` / `autoace-local` only when the corresponding environment variables are omitted. Deployed environments must set strong values for:
@@ -130,9 +134,28 @@ npm run lint
 npm run build
 ```
 
-## Reproducible labeled-set evaluation
+## Blind hybrid evaluation
 
-Run the exact same classifier used by the API against a folder or ZIP:
+Prediction and label comparison are deliberately separate. Write blind predictions first:
+
+```bash
+uv run python scripts/evaluate_hybrid.py blind /path/to/audio_folder \
+  artifacts/hybrid/blind_predictions.json
+```
+
+Only after that artifact exists, compare it with a manifest:
+
+```bash
+uv run python scripts/evaluate_hybrid.py compare \
+  artifacts/hybrid/blind_predictions.json /path/to/labels.csv \
+  artifacts/hybrid/labeled_comparison.json
+```
+
+Local recordings, labels, `.env`, and generated artifacts are ignored by Git. Sanitized aggregate results are published under `docs/results/`.
+
+## Baseline evaluation
+
+The retained Gemini-only baseline can be evaluated against a folder or ZIP:
 
 ```bash
 uv run python scripts/evaluate_batch.py /path/to/evaluation_batch \
@@ -148,6 +171,12 @@ This writes:
 
 When labels are present, `run_details.json` includes per-field accuracy and an emotional-tone confusion matrix. Model confidence is reported but is not counted as a ground-truth exact-field match.
 
+## Hybrid and Modal architecture
+
+Scribe supplies the full transcript, word timestamps, speaker IDs, audio events, overlap intervals, and maximum interword gap. Role-based selection isolates the customer without labels. Customer timestamps and audio are sent to the configured Modal endpoint, where a preloaded emotion2vec model returns duration-weighted negative, positive, and neutral affect. Gemini returns structured customer-semantic evidence and a raw-audio baseline. Named deterministic rules fuse these signals, preventing one general-purpose model from controlling every output field.
+
+The Modal service is defined in `modal_service/emotion_service.py`. It decodes audio with ffmpeg, clips only supplied customer segments, runs the volume-mounted emotion2vec model, and aggregates scores by speech duration. Deploy it separately with Modal and configure its HTTPS endpoint through `EMOTION_SERVICE_URL`.
+
 ## Model configuration
 
 Defaults:
@@ -158,7 +187,7 @@ GEMINI_THINKING_LEVEL=low
 BATCH_CONCURRENCY=3
 ```
 
-The prompt contains the trial's operational definitions and explicitly separates customer emotion, non-speech background noise, technical audio quality, overlap, and dead air. Model and thinking level are environment-configurable so candidate models can be compared without changing application code.
+The production endpoint uses `HybridAnalyzer`. Affect, persistent-noise, and abnormal-dead-air thresholds are named in `autoace_backend/hybrid_analyzer.py` and covered by unit tests.
 
 ## Cost constraint
 
@@ -168,7 +197,7 @@ For Gemini 3.6 Flash, the hosted interactive API and the lower-cost Batch/Flex c
 
 ## Data handling
 
-Production-call audio is confidential. The service does not persist uploaded audio or labels to a database; data is held only for the request lifetime. The current classifier sends raw audio to the configured Gemini API, so the final memo/deployment must disclose the provider and its retention/training policy and use an AutoAce-approved processing tier/provider.
+Production-call audio is confidential. The application does not persist uploaded audio, transcripts, or labels to a database; request data is held only for the request lifetime. Audio is sent to configured Gemini, ElevenLabs, and Modal services, so production must use AutoAce-approved accounts, regions, tiers, and retention/training controls. Local recordings, manifests, credentials, and raw artifacts are excluded from Git.
 
 ## Vercel deployment
 
@@ -182,6 +211,9 @@ Set:
 GEMINI_API_KEY
 GEMINI_MODEL
 GEMINI_THINKING_LEVEL
+ELEVENLABS_API_KEY
+ELEVENLABS_SCRIBE_MODEL
+EMOTION_SERVICE_URL
 DASHBOARD_USERNAME
 DASHBOARD_PASSWORD
 AUTH_SECRET
@@ -209,4 +241,4 @@ The implementation validates both folder selections and ZIP archives at the API 
 - `POST /api/v1/auth/login` - evaluator login
 - `POST /api/v1/batches/analyze` - authenticated ZIP/folder batch analysis; streams NDJSON events
 
-The batch endpoint emits `batch_started`, `file_completed`, `file_failed`, and `batch_completed` events. A single file failure is isolated from the rest of the batch.
+The batch endpoint emits `batch_started`, `file_completed`, `file_failed`, and `batch_completed` events. Each file is an independent pipeline unit: malformed input or a provider failure is reported for that file without aborting the rest of the batch.
